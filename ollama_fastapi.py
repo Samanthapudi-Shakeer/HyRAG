@@ -172,6 +172,28 @@ def build_citations(context_blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return citations
 
 
+def concise_hypothetical(text: str, max_sentences: int = 2, max_chars: int = 400) -> str:
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        return ""
+    sentences = []
+    start = 0
+    for idx, char in enumerate(cleaned):
+        if char in ".!?":
+            sentence = cleaned[start : idx + 1].strip()
+            if sentence:
+                sentences.append(sentence)
+            start = idx + 1
+        if len(sentences) >= max_sentences:
+            break
+    if not sentences:
+        sentences = [cleaned]
+    concise = " ".join(sentences).strip()
+    if len(concise) > max_chars:
+        concise = concise[: max_chars - 1].rstrip() + "…"
+    return concise
+
+
 def chunk_to_prompt_blocks(context_blocks: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     prompt_blocks: List[Dict[str, str]] = []
     for idx, block in enumerate(context_blocks):
@@ -253,10 +275,11 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
         artifacts, query, config
     )
     if not primary_indices or not check_evidence(fused_scores, max_bm25, config):
+        _, hypothetical = retrieve_auxiliary(artifacts, query, config)
         return {
-            "answer": "Not available in the document.",
+            "answer": concise_hypothetical(hypothetical) or "Not available in the document.",
             "citations": [],
-            "hypothetical_answer": "",
+            "hypothetical_answer": hypothetical,
             "matched_sources": {
                 "primary": [],
                 "auxiliary": [],
@@ -276,6 +299,8 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
     prompt_blocks = chunk_to_prompt_blocks(context_blocks)
     prompt = final_answer_prompt(query, prompt_blocks)
     answer = ollama_generate(prompt, config.LLM_MODEL, config.OLLAMA_BASE_URL, config.OFFLINE_GUARD)
+    if not answer:
+        answer = concise_hypothetical(hypothetical) or "Not available in the document."
 
     citations = build_citations(context_blocks)
     def _summarize(
