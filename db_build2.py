@@ -6,7 +6,7 @@ from typing import List
 from chunking import Chunk, elements_to_markdown, hybrid_chunk
 from indexing import build_bm25, build_faiss, embed_texts, ensure_store_dir, save_bm25, save_faiss
 from loaders import load_folder
-from utils_qms import check_ollama_model, ensure_dir, load_config, write_jsonl
+from utils_qms import check_ollama_model, ensure_dir, load_config, write_jsonl, write_pickle
 
 
 def ingest_folder(docs_folder: str, store_dir: str) -> List[Chunk]:
@@ -39,6 +39,7 @@ def build_indexes(chunks: List[Chunk], store_dir: str) -> None:
     bm25_index = build_bm25(texts)
 
     save_faiss(faiss_index, os.path.join(store_dir, "faiss.index"))
+    save_faiss(faiss_index, os.path.join(store_dir, "faiss_index.bin"))
     save_bm25(bm25_index, os.path.join(store_dir, "bm25.json"))
 
     metadata = [
@@ -53,6 +54,24 @@ def build_indexes(chunks: List[Chunk], store_dir: str) -> None:
         for chunk in chunks
     ]
     write_jsonl(os.path.join(store_dir, "chunks.jsonl"), metadata)
+    write_pickle(os.path.join(store_dir, "chunks_metadata.pkl"), metadata)
+
+    document_map: dict[str, dict[str, object]] = {}
+    for chunk in chunks:
+        entry = document_map.setdefault(
+            chunk.source,
+            {"chunk_ids": [], "pages": set(), "sections": set()},
+        )
+        entry["chunk_ids"].append(chunk.chunk_id)
+        entry["pages"].add(chunk.page)
+        if chunk.section_path:
+            entry["sections"].add(chunk.section_path)
+
+    for entry in document_map.values():
+        entry["pages"] = sorted(entry["pages"])
+        entry["sections"] = sorted(entry["sections"])
+
+    write_pickle(os.path.join(store_dir, "documnet_map.pkl"), document_map)
 
 
 def main() -> None:
