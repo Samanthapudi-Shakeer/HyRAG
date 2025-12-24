@@ -1,5 +1,6 @@
 import json
 import os
+import pickle
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -73,3 +74,13 @@ def write_jsonl(path: str, items: list[Dict[str, Any]]) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         for item in items:
             handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+
+def read_pickle(path: str) -> Any:
+    with open(path, "rb") as handle:
+        return pickle.load(handle)
+
+
+def write_pickle(path: str, payload: Any) -> None:
+    with open(path, "wb") as handle:
+        pickle.dump(payload, handle)
