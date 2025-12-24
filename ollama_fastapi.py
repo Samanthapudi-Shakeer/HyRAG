@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from typing import Any, Dict, List
@@ -28,13 +29,55 @@ class RAGArtifacts:
         jsonl_path = os.path.join(store_dir, "chunks.jsonl")
         pkl_path = os.path.join(store_dir, "chunks_metadata.pkl")
         if os.path.exists(jsonl_path):
-            return read_jsonl(jsonl_path)
+            return RAGArtifacts._normalize_chunks(read_jsonl(jsonl_path))
         if os.path.exists(pkl_path):
             payload = read_pickle(pkl_path)
+            if isinstance(payload, dict) and "chunks" in payload:
+                payload = payload["chunks"]
             if isinstance(payload, list):
-                return payload
-            raise RuntimeError("chunks_metadata.pkl did not contain a list payload.")
+                return RAGArtifacts._normalize_chunks(payload)
+            raise RuntimeError(
+                "chunks_metadata.pkl did not contain a list payload or chunks field."
+            )
         raise FileNotFoundError("No chunk metadata found (chunks.jsonl or chunks_metadata.pkl).")
+
+    @staticmethod
+    def _normalize_chunks(raw_chunks: List[Any]) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for idx, item in enumerate(raw_chunks):
+            if isinstance(item, dict):
+                data = dict(item)
+            else:
+                data = {
+                    "chunk_id": getattr(item, "chunk_id", None),
+                    "text": getattr(item, "text", None),
+                    "source": getattr(item, "source", None),
+                    "page": getattr(item, "page", None),
+                    "section_path": getattr(item, "section_path", None),
+                    "content_type": getattr(item, "content_type", None),
+                }
+
+            source = data.get("source") or "unknown"
+            page = data.get("page") or 1
+            section_path = data.get("section_path") or ""
+            text = data.get("text") or ""
+            content_type = data.get("content_type") or "paragraph"
+            chunk_id = data.get("chunk_id")
+            if not chunk_id:
+                seed = f"{source}-{section_path}-{page}-{idx}"
+                chunk_id = hashlib.sha1(seed.encode("utf-8")).hexdigest()
+
+            normalized.append(
+                {
+                    "chunk_id": chunk_id,
+                    "text": text,
+                    "source": source,
+                    "page": page,
+                    "section_path": section_path,
+                    "content_type": content_type,
+                }
+            )
+        return normalized
 
     @staticmethod
     def _load_bm25(store_dir: str, chunks: List[Dict[str, Any]]) -> BM25Index:
