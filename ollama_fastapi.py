@@ -7,9 +7,9 @@ import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from indexing import BM25Index, embed_texts, load_bm25, load_faiss, search_faiss, tokenize
+from indexing import BM25Index, build_bm25, embed_texts, load_bm25, load_faiss, search_faiss, tokenize
 from prompts import final_answer_prompt, hypothetical_answer_prompt
-from utils_qms import assert_local_url, load_config, read_jsonl
+from utils_qms import assert_local_url, load_config, read_jsonl, read_pickle
 
 
 class QueryRequest(BaseModel):
@@ -19,9 +19,40 @@ class QueryRequest(BaseModel):
 class RAGArtifacts:
     def __init__(self, store_dir: str):
         self.store_dir = store_dir
-        self.chunks = read_jsonl(os.path.join(store_dir, "chunks.jsonl"))
-        self.bm25 = load_bm25(os.path.join(store_dir, "bm25.json"))
-        self.faiss = load_faiss(os.path.join(store_dir, "faiss.index"))
+        self.chunks = self._load_chunks(store_dir)
+        self.bm25 = self._load_bm25(store_dir, self.chunks)
+        self.faiss = self._load_faiss(store_dir)
+
+    @staticmethod
+    def _load_chunks(store_dir: str) -> List[Dict[str, Any]]:
+        jsonl_path = os.path.join(store_dir, "chunks.jsonl")
+        pkl_path = os.path.join(store_dir, "chunks_metadata.pkl")
+        if os.path.exists(jsonl_path):
+            return read_jsonl(jsonl_path)
+        if os.path.exists(pkl_path):
+            payload = read_pickle(pkl_path)
+            if isinstance(payload, list):
+                return payload
+            raise RuntimeError("chunks_metadata.pkl did not contain a list payload.")
+        raise FileNotFoundError("No chunk metadata found (chunks.jsonl or chunks_metadata.pkl).")
+
+    @staticmethod
+    def _load_bm25(store_dir: str, chunks: List[Dict[str, Any]]) -> BM25Index:
+        bm25_path = os.path.join(store_dir, "bm25.json")
+        if os.path.exists(bm25_path):
+            return load_bm25(bm25_path)
+        texts = [chunk.get("text", "") for chunk in chunks]
+        return build_bm25(texts)
+
+    @staticmethod
+    def _load_faiss(store_dir: str):
+        faiss_path = os.path.join(store_dir, "faiss.index")
+        legacy_path = os.path.join(store_dir, "faiss_index.bin")
+        if os.path.exists(faiss_path):
+            return load_faiss(faiss_path)
+        if os.path.exists(legacy_path):
+            return load_faiss(legacy_path)
+        raise FileNotFoundError("No FAISS index found (faiss.index or faiss_index.bin).")
 
 
 def ollama_generate(prompt: str, model: str, base_url: str, offline_guard: bool) -> str:
@@ -123,7 +154,10 @@ def retrieve_primary(
     dense_ranked: List[tuple[int, float]] = []
     if config.USE_DENSE:
         query_emb = embed_texts([query], config.OLLAMA_BASE_URL, config.EMBED_MODEL, config.OFFLINE_GUARD)
-        dense_ranked = search_faiss(artifacts.faiss, query_emb, config.DENSE_TOPN)
+        if artifacts.faiss.d != query_emb.shape[1]:
+            dense_ranked = []
+        else:
+            dense_ranked = search_faiss(artifacts.faiss, query_emb, config.DENSE_TOPN)
 
     fused_scores = rrf_fusion(bm25_ranked, dense_ranked, config.RRF_K)
     ranked_indices = [idx for idx, _ in sorted(fused_scores.items(), key=lambda item: item[1], reverse=True)]
@@ -136,6 +170,8 @@ def retrieve_auxiliary(artifacts: RAGArtifacts, query: str, config) -> tuple[Lis
     if not hypothetical:
         return [], ""
     hypo_emb = embed_texts([hypothetical], config.OLLAMA_BASE_URL, config.EMBED_MODEL, config.OFFLINE_GUARD)
+    if artifacts.faiss.d != hypo_emb.shape[1]:
+        return [], hypothetical
     aux_results = search_faiss(artifacts.faiss, hypo_emb, config.HYDE_TOPN)
     return [idx for idx, _ in aux_results], hypothetical
 
