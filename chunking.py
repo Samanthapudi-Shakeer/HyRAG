@@ -29,7 +29,7 @@ def elements_to_markdown(elements: Iterable[DocElement]) -> str:
     return "\n".join(lines)
 
 
-def _docling_chunk(markdown: str, min_tokens: int, max_tokens: int):
+def _build_docling_document(markdown: str):
     try:
         from docling.chunking import HybridChunker
         from docling.datamodel.document import DoclingDocument
@@ -39,10 +39,24 @@ def _docling_chunk(markdown: str, min_tokens: int, max_tokens: int):
         ) from exc
 
     if hasattr(DoclingDocument, "from_markdown"):
-        document = DoclingDocument.from_markdown(markdown)
-    else:
-        document = DoclingDocument(markdown)
+        return DoclingDocument.from_markdown(markdown)
+    if hasattr(DoclingDocument, "from_md"):
+        return DoclingDocument.from_md(markdown)
+    if hasattr(DoclingDocument, "from_text"):
+        return DoclingDocument.from_text(markdown)
+    try:
+        return DoclingDocument(content=markdown)
+    except TypeError as exc:
+        raise RuntimeError(
+            "DoclingDocument constructor did not accept markdown input. "
+            "Ensure docling provides a markdown factory method."
+        ) from exc
 
+
+def _docling_chunk(markdown: str, min_tokens: int, max_tokens: int):
+    from docling.chunking import HybridChunker
+
+    document = _build_docling_document(markdown)
     chunker = HybridChunker(min_tokens=min_tokens, max_tokens=max_tokens)
     return chunker.chunk(document)
 
