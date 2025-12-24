@@ -130,14 +130,14 @@ def retrieve_primary(
     return ranked_indices, fused_scores, max_bm25
 
 
-def retrieve_auxiliary(artifacts: RAGArtifacts, query: str, config) -> List[int]:
+def retrieve_auxiliary(artifacts: RAGArtifacts, query: str, config) -> tuple[List[int], str]:
     prompt = hypothetical_answer_prompt(query)
     hypothetical = ollama_generate(prompt, config.LLM_MODEL, config.OLLAMA_BASE_URL, config.OFFLINE_GUARD)
     if not hypothetical:
-        return []
+        return [], ""
     hypo_emb = embed_texts([hypothetical], config.OLLAMA_BASE_URL, config.EMBED_MODEL, config.OFFLINE_GUARD)
     aux_results = search_faiss(artifacts.faiss, hypo_emb, config.HYDE_TOPN)
-    return [idx for idx, _ in aux_results]
+    return [idx for idx, _ in aux_results], hypothetical
 
 
 def check_evidence(scores: Dict[int, float], max_bm25: float, config) -> bool:
@@ -175,6 +175,7 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
         return {
             "answer": "Not available in the document.",
             "citations": [],
+            "hypothetical_answer": "",
             "matched_sources": {
                 "primary": [],
                 "auxiliary": [],
@@ -182,7 +183,7 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
             "debug": {"reason": "low_confidence"} if config.DEBUG else None,
         }
 
-    auxiliary_indices = retrieve_auxiliary(artifacts, query, config)
+    auxiliary_indices, hypothetical = retrieve_auxiliary(artifacts, query, config)
     context_blocks = build_context(
         artifacts,
         primary_indices,
@@ -196,7 +197,7 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
     answer = ollama_generate(prompt, config.LLM_MODEL, config.OLLAMA_BASE_URL, config.OFFLINE_GUARD)
 
     citations = build_citations(context_blocks)
-    def _summarize(indices: List[int]) -> List[Dict[str, Any]]:
+    def _summarize(indices: List[int], source_type: str) -> List[Dict[str, Any]]:
         summary: List[Dict[str, Any]] = []
         for idx in indices:
             chunk = artifacts.chunks[idx]
@@ -206,6 +207,7 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
                     "source": chunk.get("source"),
                     "page": chunk.get("page"),
                     "section_path": chunk.get("section_path"),
+                    "source_type": source_type,
                 }
             )
         return summary
@@ -213,9 +215,10 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
     response: Dict[str, Any] = {
         "answer": answer,
         "citations": citations,
+        "hypothetical_answer": hypothetical,
         "matched_sources": {
-            "primary": _summarize(primary_indices[: config.FINAL_TOPK]),
-            "auxiliary": _summarize(auxiliary_indices),
+            "primary": _summarize(primary_indices[: config.FINAL_TOPK], "docstore"),
+            "auxiliary": _summarize(auxiliary_indices, "hyde"),
         },
     }
     if config.DEBUG:
