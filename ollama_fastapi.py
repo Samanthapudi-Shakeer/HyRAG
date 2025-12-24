@@ -184,7 +184,7 @@ def retrieve_primary(
     artifacts: RAGArtifacts,
     query: str,
     config,
-) -> tuple[List[int], Dict[int, float], float]:
+) -> tuple[List[int], Dict[int, float], float, List[float]]:
     query_tokens = tokenize(query)
     bm25_scores = artifacts.bm25.score(query_tokens)
     max_bm25 = max(bm25_scores) if bm25_scores else 0.0
@@ -204,7 +204,7 @@ def retrieve_primary(
 
     fused_scores = rrf_fusion(bm25_ranked, dense_ranked, config.RRF_K)
     ranked_indices = [idx for idx, _ in sorted(fused_scores.items(), key=lambda item: item[1], reverse=True)]
-    return ranked_indices, fused_scores, max_bm25
+    return ranked_indices, fused_scores, max_bm25, bm25_scores
 
 
 def retrieve_auxiliary(artifacts: RAGArtifacts, query: str, config) -> tuple[List[int], str]:
@@ -249,7 +249,9 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
     if not query:
         raise HTTPException(status_code=400, detail="Query is required")
 
-    primary_indices, fused_scores, max_bm25 = retrieve_primary(artifacts, query, config)
+    primary_indices, fused_scores, max_bm25, bm25_scores = retrieve_primary(
+        artifacts, query, config
+    )
     if not primary_indices or not check_evidence(fused_scores, max_bm25, config):
         return {
             "answer": "Not available in the document.",
@@ -276,7 +278,9 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
     answer = ollama_generate(prompt, config.LLM_MODEL, config.OLLAMA_BASE_URL, config.OFFLINE_GUARD)
 
     citations = build_citations(context_blocks)
-    def _summarize(indices: List[int], source_type: str) -> List[Dict[str, Any]]:
+    def _summarize(
+        indices: List[int], source_type: str, score_map: Dict[int, float]
+    ) -> List[Dict[str, Any]]:
         summary: List[Dict[str, Any]] = []
         for idx in indices:
             chunk = artifacts.chunks[idx]
@@ -287,6 +291,8 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
                     "page": chunk.get("page"),
                     "section_path": chunk.get("section_path"),
                     "source_type": source_type,
+                    "rrf_score": score_map.get(idx),
+                    "bm25_score": bm25_scores[idx] if idx < len(bm25_scores) else None,
                 }
             )
         return summary
@@ -296,8 +302,10 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
         "citations": citations,
         "hypothetical_answer": hypothetical,
         "matched_sources": {
-            "primary": _summarize(primary_indices[: config.FINAL_TOPK], "docstore"),
-            "auxiliary": _summarize(auxiliary_indices, "hyde"),
+            "primary": _summarize(
+                primary_indices[: config.FINAL_TOPK], "docstore", fused_scores
+            ),
+            "auxiliary": _summarize(auxiliary_indices, "hyde", fused_scores),
         },
     }
     if config.DEBUG:
