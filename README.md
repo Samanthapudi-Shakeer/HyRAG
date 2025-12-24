@@ -16,7 +16,7 @@ Fully offline RAG system for QMS-style documents using local Ollama models for e
 Install dependencies in your environment (example):
 
 ```bash
-pip install fastapi uvicorn pyyaml requests numpy faiss-cpu pymupdf python-docx
+pip install fastapi uvicorn pyyaml requests numpy faiss-cpu pymupdf python-docx docling
 ```
 
 > Note: `python-docx` is only needed for DOCX ingestion.
@@ -40,6 +40,7 @@ This parses documents, chunks them, builds BM25 and FAISS indexes, and writes ar
 
 ### Troubleshooting build errors
 
+- **Docling missing**: install `docling` to enable hybrid chunking.
 - **500 Internal Server Error from Ollama**: ensure the embedding model configured in `config.yml` is already pulled in Ollama. Example: `OLLAMA_BASE_URL/api/tags` should list `bge-small-en-v1.5`.
 - **Missing model**: update `EMBED_MODEL` in `config.yml` to a model that exists locally, or pull the model in Ollama.
 - **Ollama not running**: start Ollama locally before running `db_build2.py`.
