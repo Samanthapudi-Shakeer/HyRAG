@@ -1,5 +1,6 @@
 import hashlib
 from dataclasses import dataclass
+import importlib.util
 from typing import Iterable, List
 
 from loaders import DocElement
@@ -30,13 +31,16 @@ def elements_to_markdown(elements: Iterable[DocElement]) -> str:
 
 
 def _build_docling_document(markdown: str):
-    try:
-        from docling.chunking import HybridChunker
-        from docling.datamodel.document import DoclingDocument
-    except ImportError as exc:
+    if not importlib.util.find_spec("docling"):
         raise RuntimeError(
             "Docling is required for hybrid chunking. Install docling and retry."
-        ) from exc
+        )
+    if not importlib.util.find_spec("docling.datamodel.document"):
+        raise RuntimeError(
+            "Docling is required for hybrid chunking. Install docling and retry."
+        )
+
+    from docling.datamodel.document import DoclingDocument
 
     if hasattr(DoclingDocument, "from_markdown"):
         return DoclingDocument.from_markdown(markdown)
@@ -54,6 +58,10 @@ def _build_docling_document(markdown: str):
 
 
 def _docling_chunk(markdown: str, min_tokens: int, max_tokens: int):
+    if not importlib.util.find_spec("docling.chunking"):
+        raise RuntimeError(
+            "Docling is required for hybrid chunking. Install docling and retry."
+        )
     from docling.chunking import HybridChunker
 
     document = _build_docling_document(markdown)
