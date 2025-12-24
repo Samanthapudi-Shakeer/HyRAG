@@ -110,9 +110,10 @@ def retrieve_primary(
     artifacts: RAGArtifacts,
     query: str,
     config,
-) -> tuple[List[int], Dict[int, float]]:
+) -> tuple[List[int], Dict[int, float], float]:
     query_tokens = tokenize(query)
     bm25_scores = artifacts.bm25.score(query_tokens)
+    max_bm25 = max(bm25_scores) if bm25_scores else 0.0
     bm25_ranked = sorted(
         [(idx, score) for idx, score in enumerate(bm25_scores)],
         key=lambda item: item[1],
@@ -126,7 +127,7 @@ def retrieve_primary(
 
     fused_scores = rrf_fusion(bm25_ranked, dense_ranked, config.RRF_K)
     ranked_indices = [idx for idx, _ in sorted(fused_scores.items(), key=lambda item: item[1], reverse=True)]
-    return ranked_indices, fused_scores
+    return ranked_indices, fused_scores, max_bm25
 
 
 def retrieve_auxiliary(artifacts: RAGArtifacts, query: str, config) -> List[int]:
@@ -139,11 +140,13 @@ def retrieve_auxiliary(artifacts: RAGArtifacts, query: str, config) -> List[int]
     return [idx for idx, _ in aux_results]
 
 
-def check_evidence(scores: Dict[int, float], config) -> bool:
+def check_evidence(scores: Dict[int, float], max_bm25: float, config) -> bool:
     if not scores:
         return False
     best = max(scores.values())
-    return best >= config.MIN_SCORE_THRESHOLD
+    if best >= config.MIN_SCORE_THRESHOLD:
+        return True
+    return max_bm25 > 0.0
 
 
 config = load_config()
@@ -167,11 +170,15 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
     if not query:
         raise HTTPException(status_code=400, detail="Query is required")
 
-    primary_indices, fused_scores = retrieve_primary(artifacts, query, config)
-    if not check_evidence(fused_scores, config):
+    primary_indices, fused_scores, max_bm25 = retrieve_primary(artifacts, query, config)
+    if not primary_indices or not check_evidence(fused_scores, max_bm25, config):
         return {
             "answer": "Not available in the document.",
             "citations": [],
+            "matched_sources": {
+                "primary": [],
+                "auxiliary": [],
+            },
             "debug": {"reason": "low_confidence"} if config.DEBUG else None,
         }
 
@@ -189,7 +196,28 @@ def query_endpoint(request: QueryRequest) -> Dict[str, Any]:
     answer = ollama_generate(prompt, config.LLM_MODEL, config.OLLAMA_BASE_URL, config.OFFLINE_GUARD)
 
     citations = build_citations(context_blocks)
-    response: Dict[str, Any] = {"answer": answer, "citations": citations}
+    def _summarize(indices: List[int]) -> List[Dict[str, Any]]:
+        summary: List[Dict[str, Any]] = []
+        for idx in indices:
+            chunk = artifacts.chunks[idx]
+            summary.append(
+                {
+                    "chunk_id": chunk.get("chunk_id"),
+                    "source": chunk.get("source"),
+                    "page": chunk.get("page"),
+                    "section_path": chunk.get("section_path"),
+                }
+            )
+        return summary
+
+    response: Dict[str, Any] = {
+        "answer": answer,
+        "citations": citations,
+        "matched_sources": {
+            "primary": _summarize(primary_indices[: config.FINAL_TOPK]),
+            "auxiliary": _summarize(auxiliary_indices),
+        },
+    }
     if config.DEBUG:
         response["debug"] = {
             "primary_indices": primary_indices[: config.FINAL_TOPK],
