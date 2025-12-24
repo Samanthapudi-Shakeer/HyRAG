@@ -75,12 +75,15 @@ def embed_texts(texts: List[str], base_url: str, model: str, offline_guard: bool
         assert_local_url(base_url)
     embeddings: List[List[float]] = []
     for text in texts:
-        response = requests.post(
-            f"{base_url}/api/embeddings",
-            json={"model": model, "prompt": text},
-            timeout=120,
-        )
-        response.raise_for_status()
+        payload = {"model": model, "prompt": text}
+        response = requests.post(f"{base_url}/api/embeddings", json=payload, timeout=120)
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            detail = response.text
+            raise RuntimeError(
+                f"Ollama embeddings failed with status {response.status_code}: {detail}"
+            ) from exc
         data = response.json()
         embeddings.append(data["embedding"])
     return np.array(embeddings, dtype="float32")

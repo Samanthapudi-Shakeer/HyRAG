@@ -6,7 +6,7 @@ from typing import List
 from chunking import Chunk, elements_to_markdown, hybrid_chunk
 from indexing import build_bm25, build_faiss, embed_texts, ensure_store_dir, save_bm25, save_faiss
 from loaders import load_folder
-from utils_qms import ensure_dir, load_config, write_jsonl
+from utils_qms import check_ollama_model, ensure_dir, load_config, write_jsonl
 
 
 def ingest_folder(docs_folder: str, store_dir: str) -> List[Chunk]:
@@ -59,6 +59,8 @@ def main() -> None:
     print("Loading configuration...")
     global CONFIG
     CONFIG = load_config()
+    print("Checking Ollama availability...")
+    check_ollama_model(CONFIG.OLLAMA_BASE_URL, CONFIG.EMBED_MODEL, CONFIG.OFFLINE_GUARD)
     print(f"Ingesting documents from {CONFIG.DOCS_FOLDER}...")
     chunks = ingest_folder(CONFIG.DOCS_FOLDER, CONFIG.STORE_DIR)
     print(f"Generated {len(chunks)} chunks. Building indexes...")

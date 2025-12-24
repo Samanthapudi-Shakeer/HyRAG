@@ -43,6 +43,23 @@ def assert_local_url(url: str) -> None:
         raise ValueError(f"Non-local URL blocked: {url}")
 
 
+def check_ollama_model(base_url: str, model: str, offline_guard: bool) -> None:
+    if offline_guard:
+        assert_local_url(base_url)
+    try:
+        import requests
+    except ImportError as exc:  # pragma: no cover - environment-specific
+        raise RuntimeError("requests is required for Ollama connectivity checks.") from exc
+    response = requests.get(f"{base_url}/api/tags", timeout=30)
+    response.raise_for_status()
+    data = response.json()
+    available = {item.get("name") for item in data.get("models", [])}
+    if model not in available:
+        raise RuntimeError(
+            f"Ollama model '{model}' not found. Available models: {sorted(available)}"
+        )
+
+
 def read_jsonl(path: str) -> list[Dict[str, Any]]:
     items: list[Dict[str, Any]] = []
     with open(path, "r", encoding="utf-8") as handle:
